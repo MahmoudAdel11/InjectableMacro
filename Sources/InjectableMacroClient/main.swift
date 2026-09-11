@@ -4,9 +4,13 @@ import InjectableMacro
 class TripBookingViewModel {
     let repository: String
     let geocoder: String
-
-    init(repository: String, geocoder: String) {
-        self.repository = repository
-        self.geocoder = geocoder
+    var bookingCount: Int = 0
+    var lastStatus: String = "idle" {
+        didSet {
+            print("status changed to \(lastStatus)")
+        }
+    }
+    var summary: String {
+        "\(repository) - \(geocoder)"
     }
 }
