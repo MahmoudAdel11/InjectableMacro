@@ -13,4 +13,6 @@ class TripBookingViewModel {
     var summary: String {
         "\(repository) - \(geocoder)"
     }
+    let retryLimit: Int = 3
+    let backupContact: String?
 }
