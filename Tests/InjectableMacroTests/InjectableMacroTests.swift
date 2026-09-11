@@ -120,6 +120,7 @@ final class InjectableMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
+<<<<<<< Updated upstream
             class Placeholder {
                 let id: String
                 var retryCount: Int = 0
@@ -129,6 +130,9 @@ final class InjectableMacroTests: XCTestCase {
                     self.retryCount = retryCount
                 }
             }
+=======
+            PLACEHOLDER
+>>>>>>> Stashed changes
             """,
             macros: injectableMacros
         )
@@ -148,6 +152,7 @@ final class InjectableMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
+<<<<<<< Updated upstream
             class Placeholder {
                 let id: String
                 let retryLimit: Int = 3
@@ -156,6 +161,9 @@ final class InjectableMacroTests: XCTestCase {
                     self.id = id
                 }
             }
+=======
+            PLACEHOLDER
+>>>>>>> Stashed changes
             """,
             macros: injectableMacros
         )
@@ -175,6 +183,7 @@ final class InjectableMacroTests: XCTestCase {
             }
             """,
             expandedSource: """
+<<<<<<< Updated upstream
             class Placeholder {
                 let id: String
                 let backupContact: String?
@@ -242,6 +251,11 @@ final class InjectableMacroTests: XCTestCase {
                 )
             ],
             macros: injectableMacros
+=======
+            PLACEHOLDER
+            """,
+            macros: injectableMacros
+>>>>>>> Stashed changes
         )
         #else
         throw XCTSkip("macros are only supported when running tests for the host platform")
