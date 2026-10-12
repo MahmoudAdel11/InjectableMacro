@@ -247,4 +247,96 @@ final class InjectableMacroTests: XCTestCase {
         throw XCTSkip("macros are only supported when running tests for the host platform")
         #endif
     }
+
+    func testInjectableSkipsStaticMembers() throws {
+        #if canImport(InjectableMacroMacros)
+        assertMacroExpansion(
+            """
+            @Injectable
+            class Placeholder {
+                let id: String
+                static var count: Int = 0
+                static let name: String
+            }
+            """,
+            expandedSource: """
+            class Placeholder {
+                let id: String
+                static var count: Int = 0
+                static let name: String
+
+                init(id: String) {
+                    self.id = id
+                }
+            }
+            """,
+            macros: injectableMacros
+        )
+        #else
+        throw XCTSkip("macros are only supported when running tests for the host platform")
+        #endif
+    }
+
+    func testInjectableSkipsLazyMembers() throws {
+        #if canImport(InjectableMacroMacros)
+        assertMacroExpansion(
+            """
+            @Injectable
+            class Placeholder {
+                let id: String
+                lazy var cache: [String: Int] = [:]
+            }
+            """,
+            expandedSource: """
+            class Placeholder {
+                let id: String
+                lazy var cache: [String: Int] = [:]
+
+                init(id: String) {
+                    self.id = id
+                }
+            }
+            """,
+            macros: injectableMacros
+        )
+        #else
+        throw XCTSkip("macros are only supported when running tests for the host platform")
+        #endif
+    }
+
+    func testInjectableWarnsOnStateInClass() throws {
+        #if canImport(InjectableMacroMacros)
+        assertMacroExpansion(
+            """
+            @Injectable
+            class Placeholder {
+                let id: String
+                @State var flag: Bool
+            }
+            """,
+            expandedSource: """
+            class Placeholder {
+                let id: String
+                @State var flag: Bool
+
+                init(id: String, flag: Bool) {
+                    self.id = id
+                    self.flag = flag
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@State is meant for SwiftUI Views, not classes; consider @Published instead",
+                    line: 4,
+                    column: 5,
+                    severity: .warning
+                )
+            ],
+            macros: injectableMacros
+        )
+        #else
+        throw XCTSkip("macros are only supported when running tests for the host platform")
+        #endif
+    }
 }
