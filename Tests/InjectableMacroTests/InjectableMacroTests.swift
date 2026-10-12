@@ -339,4 +339,175 @@ final class InjectableMacroTests: XCTestCase {
         throw XCTSkip("macros are only supported when running tests for the host platform")
         #endif
     }
+
+    func testInjectableDiagnosesMissingTypeAnnotation() throws {
+        #if canImport(InjectableMacroMacros)
+        assertMacroExpansion(
+            """
+            @Injectable
+            class Placeholder {
+                let id: String
+                var retryCount = 0
+            }
+            """,
+            expandedSource: """
+            class Placeholder {
+                let id: String
+                var retryCount = 0
+
+                init(id: String) {
+                    self.id = id
+                }
+            }
+            """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message: "@Injectable requires an explicit type annotation (e.g. `var retryCount: Int = 0`)",
+                    line: 4,
+                    column: 9,
+                    severity: .error
+                )
+            ],
+            macros: injectableMacros
+        )
+        #else
+        throw XCTSkip("macros are only supported when running tests for the host platform")
+        #endif
+    }
+
+    func testInjectableDoesNotDiagnoseStaticWithoutType() throws {
+        #if canImport(InjectableMacroMacros)
+        assertMacroExpansion(
+            """
+            @Injectable
+            class Placeholder {
+                let id: String
+                static let shared = 1
+            }
+            """,
+            expandedSource: """
+            class Placeholder {
+                let id: String
+                static let shared = 1
+
+                init(id: String) {
+                    self.id = id
+                }
+            }
+            """,
+            macros: injectableMacros
+        )
+        #else
+        throw XCTSkip("macros are only supported when running tests for the host platform")
+        #endif
+    }
+
+    func testInjectableAddsEscapingToClosures() throws {
+        #if canImport(InjectableMacroMacros)
+        assertMacroExpansion(
+            """
+            @Injectable
+            class Placeholder {
+                let id: String
+                let onError: (Error) -> Void
+                let handler: @Sendable (Int) -> Void
+            }
+            """,
+            expandedSource: """
+            class Placeholder {
+                let id: String
+                let onError: (Error) -> Void
+                let handler: @Sendable (Int) -> Void
+
+                init(id: String, onError: @escaping (Error) -> Void, handler: @escaping @Sendable (Int) -> Void) {
+                    self.id = id
+                    self.onError = onError
+                    self.handler = handler
+                }
+            }
+            """,
+            macros: injectableMacros
+        )
+        #else
+        throw XCTSkip("macros are only supported when running tests for the host platform")
+        #endif
+    }
+
+    func testInjectableDoesNotAddEscapingToOptionalClosure() throws {
+        #if canImport(InjectableMacroMacros)
+        assertMacroExpansion(
+            """
+            @Injectable
+            class Placeholder {
+                let id: String
+                let onDone: (() -> Void)?
+            }
+            """,
+            expandedSource: """
+            class Placeholder {
+                let id: String
+                let onDone: (() -> Void)?
+
+                init(id: String, onDone: (() -> Void)? = nil) {
+                    self.id = id
+                    self.onDone = onDone
+                }
+            }
+            """,
+            macros: injectableMacros
+        )
+        #else
+        throw XCTSkip("macros are only supported when running tests for the host platform")
+        #endif
+    }
+
+    func testInjectableCopiesPublicAccessToInit() throws {
+        #if canImport(InjectableMacroMacros)
+        assertMacroExpansion(
+            """
+            @Injectable
+            public class Placeholder {
+                public let key: String
+            }
+            """,
+            expandedSource: """
+            public class Placeholder {
+                public let key: String
+
+                public init(key: String) {
+                    self.key = key
+                }
+            }
+            """,
+            macros: injectableMacros
+        )
+        #else
+        throw XCTSkip("macros are only supported when running tests for the host platform")
+        #endif
+    }
+
+    func testInjectableKeepsInternalInitForInternalClass() throws {
+        #if canImport(InjectableMacroMacros)
+        assertMacroExpansion(
+            """
+            @Injectable
+            class Placeholder {
+                let key: String
+            }
+            """,
+            expandedSource: """
+            class Placeholder {
+                let key: String
+
+                init(key: String) {
+                    self.key = key
+                }
+            }
+            """,
+            macros: injectableMacros
+        )
+        #else
+        throw XCTSkip("macros are only supported when running tests for the host platform")
+        #endif
+    }
 }

@@ -71,18 +71,10 @@ public struct InjectableMacro: MemberMacro {
 
                 guard isStored else { continue }
 
-                guard
-                    let identifierPattern = binding.pattern.as(IdentifierPatternSyntax.self),
-                    let typeAnnotation = binding.typeAnnotation?.type
-                else {
+                guard let identifierPattern = binding.pattern.as(IdentifierPatternSyntax.self) else {
                     continue
                 }
 
-                // `typeAnnotation.description` renders the TypeSyntax node back to raw source text
-                // including its trivia, so for `let repository: String` it comes back as " String"
-                // (leading space from before the type). Trimming removes that so the extracted
-                // type name is a clean "String" instead of " String".
-                let trimmedType = typeAnnotation.description.trimmingCharacters(in: .whitespacesAndNewlines)
                 let explicitDefaultValue = binding.initializer?.value.description.trimmingCharacters(in: .whitespacesAndNewlines)
 
                 // A `let` property with an EXPLICIT default value is already fully initialized
@@ -95,6 +87,29 @@ public struct InjectableMacro: MemberMacro {
                 if isLet && explicitDefaultValue != nil {
                     continue
                 }
+
+                // Macros only see syntax, so a property without a written type (e.g.
+                // `var retryCount = 0`) can't become an init parameter. Reject it loudly rather
+                // than silently leaving it out of the init.
+                guard let typeAnnotation = binding.typeAnnotation?.type else {
+                    context.diagnose(
+                        Diagnostic(
+                            node: Syntax(binding.pattern),
+                            message: InjectableDiagnosticMessage(
+                                message: "@Injectable requires an explicit type annotation (e.g. `var retryCount: Int = 0`)",
+                                diagnosticID: MessageID(domain: "InjectableMacro", id: "missingTypeAnnotation"),
+                                severity: .error
+                            )
+                        )
+                    )
+                    continue
+                }
+
+                // `typeAnnotation.description` renders the TypeSyntax node back to raw source text
+                // including its trivia, so for `let repository: String` it comes back as " String"
+                // (leading space from before the type). Trimming removes that so the extracted
+                // type name is a clean "String" instead of " String".
+                let trimmedType = typeAnnotation.description.trimmingCharacters(in: .whitespacesAndNewlines)
 
                 // An Optional property with no explicit default value gets an implicit
                 // "nil" default, matching Swift's own memberwise-init convention for structs.
@@ -120,7 +135,7 @@ public struct InjectableMacro: MemberMacro {
 
                 storedProperties.append((
                     name: identifierPattern.identifier.text,
-                    type: trimmedType,
+                    type: parameterType(for: typeAnnotation),
                     defaultValue: defaultValue
                 ))
             }
@@ -154,13 +169,59 @@ public struct InjectableMacro: MemberMacro {
             .map { "self.\($0.name) = \($0.name)" }
             .joined(separator: "\n")
 
+        // A memberwise init is only useful to callers who can see the class, so mirror the
+        // class's access level. `open` maps to `public` because initializers can't be `open`.
+        let accessPrefix: String
+        if classDecl.modifiers.contains(where: {
+            $0.name.tokenKind == .keyword(.public) || $0.name.tokenKind == .keyword(.open)
+        }) {
+            accessPrefix = "public "
+        } else if classDecl.modifiers.contains(where: { $0.name.tokenKind == .keyword(.package) }) {
+            accessPrefix = "package "
+        } else {
+            accessPrefix = ""
+        }
+
         let initializer: DeclSyntax = """
-            init(\(raw: parameterList)) {
+            \(raw: accessPrefix)init(\(raw: parameterList)) {
                 \(raw: assignmentBody)
             }
             """
 
         return [initializer]
+    }
+
+    /// The type to use for an init parameter that stores into a property of `type`.
+    ///
+    /// A stored closure outlives the init call, so a function-typed parameter must be
+    /// `@escaping`. Optional closures are already escaping (and `@escaping` on them is a
+    /// compile error), so only bare or attributed function types are marked. A typealias'd
+    /// closure looks like any other named type in syntax, so it's left unchanged.
+    private static func parameterType(for type: TypeSyntax) -> String {
+        let unwrapped = removingRedundantParentheses(from: type)
+
+        if unwrapped.is(FunctionTypeSyntax.self) {
+            return "@escaping \(unwrapped.trimmedDescription)"
+        }
+        if let attributed = unwrapped.as(AttributedTypeSyntax.self),
+           removingRedundantParentheses(from: attributed.baseType).is(FunctionTypeSyntax.self) {
+            return "@escaping \(attributed.trimmedDescription)"
+        }
+        return type.trimmedDescription
+    }
+
+    /// Strips wrapping parentheses like `((Int) -> Void)`, which parse as a single-element
+    /// tuple type, so the function type inside can be recognized.
+    private static func removingRedundantParentheses(from type: TypeSyntax) -> TypeSyntax {
+        var current = type
+        while let tuple = current.as(TupleTypeSyntax.self),
+              tuple.elements.count == 1,
+              let element = tuple.elements.first,
+              element.firstName == nil,
+              element.ellipsis == nil {
+            current = element.type
+        }
+        return current
     }
 }
 
