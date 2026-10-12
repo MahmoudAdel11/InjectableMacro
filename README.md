@@ -53,9 +53,10 @@ This is a **compile-time source transformation**, not runtime reflection or `Mir
 `@Injectable` is implemented as a Swift `MemberMacro`. At compile time, for each class it's attached to, it:
 
 1. Parses the class's declaration as a SwiftSyntax tree and walks its members.
-2. Identifies which properties are *stored* (as opposed to computed) by inspecting each property's accessors.
-3. Extracts each stored property's name, type, and default value (if any) from the syntax tree.
-4. Uses SwiftSyntaxBuilder to synthesize a new `init` declaration from that information and adds it as a member of the class.
+2. Skips type-level and lazy members (`static`, `class`, `lazy`) by checking each property's modifiers.
+3. Identifies which properties are *stored* (as opposed to computed) by inspecting each property's accessors.
+4. Extracts each stored property's name, type, and default value (if any) from the syntax tree.
+5. Uses SwiftSyntaxBuilder to synthesize a new `init` declaration from that information and adds it as a member of the class, with the same access level as the class (`public`/`open` → `public`, `package` → `package`, otherwise internal).
 
 No part of this happens at runtime — the macro only runs while the compiler is parsing your code, and by the time you build and run the app, the generated `init` is just a normal initializer.
 
@@ -71,10 +72,24 @@ No part of this happens at runtime — the macro only runs while the compiler is
 | Optional-typed property (`T?`) with no explicit default | Included as an optional parameter, defaulting to `= nil` | Matches Swift's own memberwise-init convention for structs |
 | `@Injectable` attached to something other than a `class` | Emits a compiler **error**: `"@Injectable can only be attached to a class"` | The macro only knows how to inspect class members |
 | `@Injectable` attached to a class with no stored properties | Emits a compiler **warning**: `"@Injectable found no stored properties to generate an initializer for"`, generates nothing | There's nothing to build an initializer from, and a useless empty `init` would be worse than no `init` |
+| `static` / `class` property | **Skipped** silently | It's type-level state, not instance state |
+| `lazy` property | **Skipped** silently | Its value is computed on first access; injecting it would defeat the laziness |
+| `@State` property in a class | **Included** as before, plus a compiler **warning** on the `@State` attribute: `"@State is meant for SwiftUI Views, not classes; consider @Published instead"` | `@State` only works inside SwiftUI Views, which are structs |
+| Stored property with no type annotation (e.g. `var retryCount = 0`) | Compiler **error** on the property name, and the property is left out of the init. (A `let` with a default is still excluded by the `let` rule above, with no error.) | A macro only sees syntax, so it can't infer the type the compiler would |
+| Closure (function-type) property, e.g. `(Error) -> Void` or `@Sendable (Int) -> Void` | The init **parameter** gets `@escaping` (the stored property is unchanged). Optional closures like `(() -> Void)?` are left alone | A stored closure outlives the init call. Optional closures are already escaping, and adding `@escaping` to them is a compile error |
+| `public` / `open` class | Generated init is `public` | The init should be usable wherever the class is. `open` maps to `public` because initializers can't be `open` |
+| `package` class | Generated init is `package` | The init should be usable wherever the class is |
+| Any other class (internal, `fileprivate`, `private`, or no modifier) | Generated init has no modifier (internal) | Internal is Swift's default, so no modifier is needed |
+
+### Design Rule: Warning vs Error vs Silent Skip
+
+- **Silent skip** when the code is valid and leaving the property out is what you'd expect: `static`, `lazy`, and computed properties.
+- **Warning** when you're probably making a mistake but the code still works: `@State` in a class.
+- **Error** when the macro can't do its job and would otherwise quietly produce a wrong result: a stored property with no type annotation.
 
 ## A Complete Example
 
-This single class exercises every behavior from the table above at once:
+This single class combines the basic property behaviors from the table above:
 
 ```swift
 @Injectable
@@ -110,13 +125,19 @@ init(apiKey: String, retryCount: Int = 3, lastError: String? = nil, backupContac
 - `backupContact` — declared with **no default at all** (`let backupContact: String?`); its `= nil` in the generated init is **synthesized by the macro itself**, purely because the property's type is Optional — a different mechanism from `lastError`'s that happens to produce the same visible `= nil`.
 - `displayName` — computed property (get-only), excluded from the init entirely.
 
+## Known Limitations
+
+- **Closures behind a `typealias` aren't detected.** For `let handler: Completion` (where `Completion = () -> Void`), `@escaping` is not added, so the generated init won't compile. Spell out the closure type, or write the init by hand. The reason: macros see syntax only, never type information, and `Completion` looks like any other type name.
+- **A `var` without a type annotation is rejected** for the same reason: the macro can't know what type `var retryCount = 0` has. (`static`, `class`, and `lazy` vars are skipped before this check, so they're never rejected.)
+- **Only classes are supported.**
+
 ## Running the Tests
 
 ```bash
 swift test
 ```
 
-This runs 8 tests, each using SwiftSyntaxMacros' `assertMacroExpansion` to expand a small class definition and assert on the exact generated source (or the exact diagnostic emitted), covering every behavior listed above: basic stored-property extraction, computed-property exclusion, `didSet` handling, `var`-with-default, `let`-with-default exclusion, optional-with-implicit-nil, the non-class error, and the empty-class warning.
+This runs 17 tests, each using SwiftSyntaxMacros' `assertMacroExpansion` to expand a small class definition and assert on the exact generated source (or the exact diagnostic emitted), covering every behavior listed above: basic stored-property extraction, computed-property exclusion, `didSet` handling, `var`-with-default, `let`-with-default exclusion, optional-with-implicit-nil, the non-class error, the empty-class warning, skipping `static` and `lazy` members, the `@State` warning, the missing-type-annotation error (and no error for an untyped `static`), `@escaping` on closure parameters (and none on optional closures), and copying `public` access to the init (and keeping internal classes' init internal).
 
 ## What I Learned
 
@@ -126,3 +147,5 @@ This runs 8 tests, each using SwiftSyntaxMacros' `assertMacroExpansion` to expan
 - Diagnostics (`context.diagnose`) are how a macro communicates failure to the *caller* of the macro, at their call site — very different from throwing inside the macro implementation, which surfaces as a much less useful generic error.
 - The macro attribute declaration (`@attached(member, names: arbitrary)`) has to declare upfront what kinds of names it might introduce; the compiler enforces this before the macro even runs, which was a good reminder that macros have to declare their "contract" outside of just their implementation code.
 - Writing tests for a macro forced me to think about the macro's behavior as a specification (one test per behavior/edge case) rather than just eyeballing generated code in a sample app.
+- Review feedback showed me where "syntax only" really bites: the macro can't tell that `Completion` is a closure typealias, or what type `var retryCount = 0` has. I made the first a documented limitation and the second a compile error, instead of letting either produce wrong output silently.
+- `assertMacroExpansion` only compares text, so it can't tell me whether the generated code actually compiles. The missing `@escaping` on closure parameters looked fine as text but didn't build, so I now also compile the expanded output with `swiftc -typecheck` to prove it does.
