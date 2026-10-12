@@ -38,6 +38,21 @@ public struct InjectableMacro: MemberMacro {
                 continue
             }
 
+            // `static`/`class` members are type-level state, not instance state, and `lazy`
+            // members are computed on first access, so none of them belong in the init.
+            let isExcludedByModifier = variableDecl.modifiers.contains { modifier in
+                modifier.name.tokenKind == .keyword(.static)
+                    || modifier.name.tokenKind == .keyword(.class)
+                    || modifier.name.tokenKind == .keyword(.lazy)
+            }
+            if isExcludedByModifier {
+                continue
+            }
+
+            let stateAttribute = variableDecl.attributes.lazy
+                .compactMap { $0.as(AttributeSyntax.self) }
+                .first { $0.attributeName.as(IdentifierTypeSyntax.self)?.name.text == "State" }
+
             for binding in variableDecl.bindings {
                 let isStored: Bool
                 if let accessorBlock = binding.accessorBlock {
@@ -86,6 +101,21 @@ public struct InjectableMacro: MemberMacro {
                 var defaultValue = explicitDefaultValue
                 if defaultValue == nil && trimmedType.hasSuffix("?") {
                     defaultValue = "nil"
+                }
+
+                // `@State` is still injected as before, but it only works inside SwiftUI Views
+                // (structs), so flag it at the attribute itself rather than at `@Injectable`.
+                if let stateAttribute {
+                    context.diagnose(
+                        Diagnostic(
+                            node: Syntax(stateAttribute),
+                            message: InjectableDiagnosticMessage(
+                                message: "@State is meant for SwiftUI Views, not classes; consider @Published instead",
+                                diagnosticID: MessageID(domain: "InjectableMacro", id: "stateInClass"),
+                                severity: .warning
+                            )
+                        )
+                    )
                 }
 
                 storedProperties.append((
